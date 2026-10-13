@@ -54,6 +54,10 @@ struct Connection: Codable, Equatable {
 
     var reverseScroll = false
 
+    /// Swap ⌘ and ⌥ by position, PC-style: ⌘ → Alt (right ⌘ → AltGr),
+    /// ⌥ → Win/Super. Done via FreeRDP's RDP-scancode remap.
+    var swapCmdOpt = false
+
     var extraArgs = ""
 
     static let customResolution = "Custom"
@@ -142,6 +146,7 @@ struct Connection: Codable, Equatable {
         driveRedirect = b(.driveRedirect, false)
         captureCmdKeys = b(.captureCmdKeys, true)
         reverseScroll = b(.reverseScroll, false)
+        swapCmdOpt = b(.swapCmdOpt, false)
         extraArgs = s(.extraArgs, "")
     }
 
@@ -205,6 +210,10 @@ struct Connection: Codable, Equatable {
         if audio { args.append("/sound:sys:mac") }
         if microphone { args.append("/microphone") }
         if driveRedirect { args.append("/drive:home,~") }
+        // RDP scancodes: 0x38/0x138 = left/right Alt, 0x15b/0x15c = left/right Win.
+        if swapCmdOpt {
+            args.append("/kbd:remap:0x38=0x15b,remap:0x15b=0x38,remap:0x138=0x15c,remap:0x15c=0x138")
+        }
 
         let extras = extraArgs.split(whereSeparator: { $0 == " " || $0 == "\n" }).map(String.init)
         args.append(contentsOf: extras)
@@ -683,6 +692,7 @@ struct ContentView: View {
                     TextField("Domain", text: $state.conn.domain)
                     Toggle("Use all monitors", isOn: $state.conn.multiMonitor)
                     Toggle("Send Cmd shortcuts to session", isOn: $state.conn.captureCmdKeys)
+                    Toggle("Swap Cmd and Option (PC layout)", isOn: $state.conn.swapCmdOpt)
                     Toggle("Reverse scroll direction", isOn: $state.conn.reverseScroll)
                     Toggle("Ignore certificate", isOn: $state.conn.ignoreCert)
                     Toggle("Share clipboard", isOn: $state.conn.clipboard)
