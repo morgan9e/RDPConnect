@@ -214,11 +214,12 @@ struct Connection: Codable, Equatable {
         if audio { args.append("/sound:sys:mac") }
         if microphone { args.append("/microphone") }
         if driveRedirect { args.append("/drive:home,~") }
-        // RDP scancodes: 0x38/0x138 = left/right Alt, 0x15b/0x15c = left/right Win,
-        // 0x1d/0x11d = left/right Ctrl.
+        // RDP scancodes in decimal, since FreeRDP rejects remap entries over 10 chars:
+        // 56/312 = left/right Alt (0x38/0x138), 347/348 = left/right Win (0x15b/0x15c),
+        // 29/285 = left/right Ctrl (0x1d/0x11d).
         var remaps: [String] = []
-        if swapCmdOpt { remaps += ["0x38=0x15b", "0x15b=0x38", "0x138=0x15c", "0x15c=0x138"] }
-        if rightCtrlAsLeft { remaps.append("0x11d=0x1d") }
+        if swapCmdOpt { remaps += ["56=347", "347=56", "312=348", "348=312"] }
+        if rightCtrlAsLeft { remaps.append("285=29") }
         if !remaps.isEmpty {
             args.append("/kbd:" + remaps.map { "remap:\($0)" }.joined(separator: ","))
         }
