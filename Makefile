@@ -26,7 +26,10 @@ ifeq ($(UNAME),Darwin)
 MAC_BUNDLE_ID := com.example.RDPConnect
 
 CERT_NAME   := RDPConnect Self-Signed
-CODESIGN_ID ?= $(shell security find-certificate -c "$(CERT_NAME)" >/dev/null 2>&1 && echo "$(CERT_NAME)" || echo "-")
+# Prefer an Apple Development identity (free Apple ID works): its Team ID keeps keychain
+# and Accessibility grants stable across rebuilds. Fall back to the self-signed cert, then ad-hoc.
+APPLE_DEV_ID := $(shell security find-identity -v -p codesigning 2>/dev/null | awk '/"Apple Development/ {print $$2; exit}')
+CODESIGN_ID ?= $(or $(APPLE_DEV_ID),$(shell security find-certificate -c "$(CERT_NAME)" >/dev/null 2>&1 && echo "$(CERT_NAME)" || echo "-"))
 
 DEPLOY ?= $(shell sw_vers -productVersion | cut -d. -f1).0
 TARGET  = $(shell uname -m)-apple-macos$(DEPLOY)
