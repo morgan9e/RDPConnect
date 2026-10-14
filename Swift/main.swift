@@ -154,7 +154,10 @@ struct Connection: Codable, Equatable {
         extraArgs = s(.extraArgs, "")
     }
 
-    func buildArguments(screenSize: (w: Int, h: Int)? = nil) -> Result<[String], String> {
+    /// With `nativeFullscreen`, a fullscreen session opens as a screen-sized window instead of
+    /// using /f, and the caller fullscreens it through Accessibility (see `AppState.launch`).
+    func buildArguments(screenSize: (w: Int, h: Int)? = nil,
+                        nativeFullscreen: Bool = false) -> Result<[String], String> {
         let trimmedHost = host.trimmingCharacters(in: .whitespaces)
         guard !trimmedHost.isEmpty else { return .failure("Server address is required.") }
 
@@ -183,11 +186,14 @@ struct Connection: Codable, Equatable {
         }
 
         func even(_ n: Int) -> Int { max(n - (n % 2), 2) }
+        func sizeArgs() {
+            if isFullscreen && !nativeFullscreen { args.append("/f") }
+            else if let b = base { args.append("/w:\(even(b.w))"); args.append("/h:\(even(b.h))") }
+        }
 
         switch displayMode {
         case .scale:
-            if isFullscreen { args.append("/f") }
-            else if let b = base { args.append("/w:\(even(b.w))"); args.append("/h:\(even(b.h))") }
+            sizeArgs()
             if let b = base {
                 let sw = even(max(Int((Double(b.w) / scaleFactor).rounded()), 320))
                 let sh = even(max(Int((Double(b.h) / scaleFactor).rounded()), 240))
@@ -196,12 +202,10 @@ struct Connection: Codable, Equatable {
                 args.append("/smart-sizing")
             }
         case .dynamic:
-            if isFullscreen { args.append("/f") }
-            else if let b = base { args.append("/w:\(even(b.w))"); args.append("/h:\(even(b.h))") }
+            sizeArgs()
             args.append("/dynamic-resolution")
         case .fixed:
-            if isFullscreen { args.append("/f") }
-            else if let b = base { args.append("/w:\(even(b.w))"); args.append("/h:\(even(b.h))") }
+            sizeArgs()
         }
 
         if serverScalePercent != 100 {
@@ -442,6 +446,50 @@ final class AppState: ObservableObject {
             .first { FileManager.default.isExecutableFile(atPath: $0) }
     }
 
+    /// Homebrew's sdl-freerdp is a bare executable, so macOS leaves it out of the app
+    /// switcher. Run a clone of it from inside a minimal .app bundle instead, refreshed
+    /// whenever the original changes (e.g. after `brew upgrade`).
+    static func bundledSession(for binary: String) -> String {
+        let fm = FileManager.default
+        let source = URL(fileURLWithPath: binary).resolvingSymlinksInPath()
+        let app = supportDir().appendingPathComponent("RDP Session.app", isDirectory: true)
+        let contents = app.appendingPathComponent("Contents", isDirectory: true)
+        let exe = contents.appendingPathComponent("MacOS/sdl-freerdp")
+        let stamp = contents.appendingPathComponent("source.txt")
+
+        let attrs = try? fm.attributesOfItem(atPath: source.path)
+        let size = (attrs?[.size] as? NSNumber)?.int64Value ?? -1
+        let mtime = (attrs?[.modificationDate] as? Date)?.timeIntervalSince1970 ?? 0
+        let wanted = "\(source.path)\n\(size)\n\(mtime)"
+        if (try? String(contentsOf: stamp, encoding: .utf8)) == wanted,
+           fm.isExecutableFile(atPath: exe.path) { return exe.path }
+
+        do {
+            try? fm.removeItem(at: app)
+            try fm.createDirectory(at: exe.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try fm.copyItem(at: source, to: exe)
+            let resources = contents.appendingPathComponent("Resources", isDirectory: true)
+            try fm.createDirectory(at: resources, withIntermediateDirectories: true)
+            var plist: [String: Any] = [
+                "CFBundleExecutable": "sdl-freerdp",
+                "CFBundleIdentifier": (Bundle.main.bundleIdentifier ?? "com.example.RDPConnect") + ".session",
+                "CFBundleName": "RDP Session",
+                "CFBundlePackageType": "APPL",
+                "NSHighResolutionCapable": true,
+            ]
+            if let icon = Bundle.main.url(forResource: "AppIcon", withExtension: "icns") {
+                try? fm.copyItem(at: icon, to: resources.appendingPathComponent("AppIcon.icns"))
+                plist["CFBundleIconFile"] = "AppIcon"
+            }
+            let data = try PropertyListSerialization.data(fromPropertyList: plist, format: .xml, options: 0)
+            try data.write(to: contents.appendingPathComponent("Info.plist"))
+            try wanted.write(to: stamp, atomically: true, encoding: .utf8)
+            return exe.path
+        } catch {
+            return binary
+        }
+    }
+
     static func findMenuZap() -> String? {
         if let u = Bundle.main.url(forResource: "menuzap", withExtension: "dylib"),
            FileManager.default.fileExists(atPath: u.path) { return u.path }
@@ -549,18 +597,22 @@ final class AppState: ObservableObject {
             append("sdl-freerdp not found. Install it with: brew install freerdp")
             return
         }
-        switch conn.buildArguments(screenSize: AppState.nativeScreenSize()) {
+        // /f makes SDL animate into a Space after the first frame and leaves the window
+        // blank until a manual toggle; instead open screen-sized and fullscreen it via AX.
+        let nativeFullscreen = conn.resolution == "Fullscreen" && AXIsProcessTrusted()
+        switch conn.buildArguments(screenSize: AppState.nativeScreenSize(),
+                                   nativeFullscreen: nativeFullscreen) {
         case .failure(let msg):
             status = msg
         case .success(let args):
             persistLast()
-            launch(binary: binary, args: args)
+            launch(binary: binary, args: args, fullscreen: nativeFullscreen)
         }
     }
 
-    private func launch(binary: String, args: [String]) {
+    private func launch(binary: String, args: [String], fullscreen: Bool) {
         let proc = Process()
-        proc.executableURL = URL(fileURLWithPath: binary)
+        proc.executableURL = URL(fileURLWithPath: AppState.bundledSession(for: binary))
         proc.arguments = args
 
         var env = ProcessInfo.processInfo.environment
@@ -568,11 +620,6 @@ final class AppState: ObservableObject {
             let existing = env["DYLD_INSERT_LIBRARIES"]
             env["DYLD_INSERT_LIBRARIES"] = existing.map { "\(zap):\($0)" } ?? zap
             append("Menu shortcuts routed to the session.")
-        }
-        // SDL's Spaces-based fullscreen animates in after the first frame, which leaves
-        // the window blank until something forces a full redraw. Fill the screen directly.
-        if conn.resolution == "Fullscreen" {
-            env["SDL_VIDEO_MAC_FULLSCREEN_SPACES"] = "0"
         }
         proc.environment = env
 
@@ -614,13 +661,42 @@ final class AppState: ObservableObject {
                     if conn.reverseScroll { append("Scroll direction reversed for the session") }
                 }
             }
+            if fullscreen { fullscreenWhenReady(pid: proc.processIdentifier) }
         } catch {
             status = "Failed to launch."
             append("Failed to launch: \(error.localizedDescription)")
         }
     }
 
-    func disconnect() { process?.terminate() }
+    /// Waits for the session's main window and puts it into native fullscreen, the same as
+    /// clicking the green button. Small windows (credential prompts, errors) are skipped.
+    private func fullscreenWhenReady(pid: pid_t) {
+        let app = AXUIElementCreateApplication(pid)
+        let fullScreen = "AXFullScreen" as CFString
+        let minWidth = (NSScreen.main?.visibleFrame.width ?? 800) * 0.8
+        Task { @MainActor in
+            for _ in 0..<300 {
+                try? await Task.sleep(nanoseconds: 200_000_000)
+                guard let p = process, p.processIdentifier == pid else { return }
+                var value: CFTypeRef?
+                guard AXUIElementCopyAttributeValue(app, kAXWindowsAttribute as CFString, &value) == .success,
+                      let windows = value as? [AXUIElement] else { continue }
+                for win in windows {
+                    var sizeRef: CFTypeRef?
+                    var size = CGSize.zero
+                    guard AXUIElementCopyAttributeValue(win, kAXSizeAttribute as CFString, &sizeRef) == .success,
+                          let sizeRef, AXValueGetValue(sizeRef as! AXValue, .cgSize, &size),
+                          size.width >= minWidth else { continue }
+                    var fs: CFTypeRef?
+                    if AXUIElementCopyAttributeValue(win, fullScreen, &fs) == .success,
+                       (fs as? Bool) == true { return }
+                    AXUIElementSetAttributeValue(win, fullScreen, kCFBooleanTrue)
+                }
+            }
+        }
+    }
+
+        func disconnect() { process?.terminate() }
 }
 
 struct ContentView: View {
