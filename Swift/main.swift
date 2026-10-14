@@ -61,6 +61,9 @@ struct Connection: Codable, Equatable {
     /// Send right Ctrl as left Ctrl; Korean server layouts turn right Ctrl into Hanja.
     var rightCtrlAsLeft = false
 
+    /// Keep the menu bar and Dock from sliding in at screen edges in fullscreen.
+    var hideFullscreenUI = true
+
     var extraArgs = ""
 
     static let customResolution = "Custom"
@@ -151,6 +154,7 @@ struct Connection: Codable, Equatable {
         reverseScroll = b(.reverseScroll, false)
         swapCmdOpt = b(.swapCmdOpt, false)
         rightCtrlAsLeft = b(.rightCtrlAsLeft, false)
+        hideFullscreenUI = b(.hideFullscreenUI, true)
         extraArgs = s(.extraArgs, "")
     }
 
@@ -616,10 +620,15 @@ final class AppState: ObservableObject {
         proc.arguments = args
 
         var env = ProcessInfo.processInfo.environment
-        if conn.captureCmdKeys, let zap = AppState.findMenuZap() {
+        let hideUI = conn.hideFullscreenUI && conn.resolution == "Fullscreen"
+        if conn.captureCmdKeys || hideUI, let zap = AppState.findMenuZap() {
             let existing = env["DYLD_INSERT_LIBRARIES"]
             env["DYLD_INSERT_LIBRARIES"] = existing.map { "\(zap):\($0)" } ?? zap
-            append("Menu shortcuts routed to the session.")
+            if conn.captureCmdKeys {
+                env["RDPCONNECT_MENUZAP"] = "1"
+                append("Menu shortcuts routed to the session.")
+            }
+            if hideUI { env["RDPCONNECT_HIDE_FS_UI"] = "1" }
         }
         proc.environment = env
 
@@ -784,6 +793,7 @@ struct ContentView: View {
                     Toggle("Send Cmd shortcuts to session", isOn: $state.conn.captureCmdKeys)
                     Toggle("Swap Cmd and Option (PC layout)", isOn: $state.conn.swapCmdOpt)
                     Toggle("Send right Ctrl as left Ctrl", isOn: $state.conn.rightCtrlAsLeft)
+                    Toggle("Hide menu bar and Dock in fullscreen", isOn: $state.conn.hideFullscreenUI)
                     Toggle("Reverse scroll direction", isOn: $state.conn.reverseScroll)
                     Toggle("Ignore certificate", isOn: $state.conn.ignoreCert)
                     Toggle("Share clipboard", isOn: $state.conn.clipboard)
