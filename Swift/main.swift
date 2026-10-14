@@ -554,13 +554,18 @@ final class AppState: ObservableObject {
         proc.executableURL = URL(fileURLWithPath: binary)
         proc.arguments = args
 
+        var env = ProcessInfo.processInfo.environment
         if conn.captureCmdKeys, let zap = AppState.findMenuZap() {
-            var env = ProcessInfo.processInfo.environment
             let existing = env["DYLD_INSERT_LIBRARIES"]
             env["DYLD_INSERT_LIBRARIES"] = existing.map { "\(zap):\($0)" } ?? zap
-            proc.environment = env
             append("Menu shortcuts routed to the session.")
         }
+        // SDL's Spaces-based fullscreen animates in after the first frame, which leaves
+        // the window blank until something forces a full redraw. Fill the screen directly.
+        if conn.resolution == "Fullscreen" {
+            env["SDL_VIDEO_MAC_FULLSCREEN_SPACES"] = "0"
+        }
+        proc.environment = env
 
         let shown = args.map { $0.hasPrefix("/p:") ? "/p:******" : $0 }
         append("run: \(binary) \(shown.joined(separator: " "))")
