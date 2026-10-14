@@ -1,0 +1,30 @@
+FROM docker.io/library/debian:trixie-slim
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        ca-certificates curl make pkgconf \
+        g++-mingw-w64-ucrt64 binutils-mingw-w64-ucrt64 \
+        pacman-package-manager makepkg gnupg zstd \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY pacman.conf /etc/pacman-msys2.conf
+
+# Prebuilt Windows libraries from MSYS2's UCRT64 repo, unpacked into /sysroot/ucrt64.
+# Install scriptlets are Windows programs, so they are skipped.
+RUN keyring=$(curl -fsSL https://repo.msys2.org/msys/x86_64/ \
+        | grep -oE 'msys2-keyring-[0-9][^"]*\.pkg\.tar\.zst' | sort -uV | tail -1) \
+    && mkdir -p /tmp/keyring /sysroot/var/lib/pacman /etc/pacman-msys2.d/hooks \
+    && curl -fsSL "https://repo.msys2.org/msys/x86_64/$keyring" | tar --zstd -x -C /tmp/keyring \
+    && pacman-key --config /etc/pacman-msys2.conf --init \
+    && pacman-key --config /etc/pacman-msys2.conf \
+        --populate-from /tmp/keyring/usr/share/pacman/keyrings --populate msys2 \
+    && pacman --config /etc/pacman-msys2.conf -Sy --noconfirm --noscriptlet \
+        mingw-w64-ucrt-x86_64-qt6-base mingw-w64-ucrt-x86_64-freerdp \
+    && rm -rf /tmp/keyring /tmp/pacman-cache
+
+ENV TARGET_OS=windows \
+    MINGW_PREFIX=/sysroot/ucrt64 \
+    PKG_CONFIG_LIBDIR=/sysroot/ucrt64/lib/pkgconfig:/sysroot/ucrt64/share/pkgconfig \
+    PKG_CONFIG_SYSROOT_DIR=/sysroot
+
+WORKDIR /src

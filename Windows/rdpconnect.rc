@@ -1,0 +1,2 @@
+// Explorer icon, and the window icon Qt picks up by this name
+IDI_ICON1 ICON "icon.ico"
