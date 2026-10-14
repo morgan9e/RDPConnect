@@ -58,6 +58,9 @@ struct Connection: Codable, Equatable {
     /// ⌥ → Win/Super. Done via FreeRDP's RDP-scancode remap.
     var swapCmdOpt = false
 
+    /// Send right Ctrl as left Ctrl; Korean server layouts turn right Ctrl into Hanja.
+    var rightCtrlAsLeft = false
+
     var extraArgs = ""
 
     static let customResolution = "Custom"
@@ -147,6 +150,7 @@ struct Connection: Codable, Equatable {
         captureCmdKeys = b(.captureCmdKeys, true)
         reverseScroll = b(.reverseScroll, false)
         swapCmdOpt = b(.swapCmdOpt, false)
+        rightCtrlAsLeft = b(.rightCtrlAsLeft, false)
         extraArgs = s(.extraArgs, "")
     }
 
@@ -210,9 +214,13 @@ struct Connection: Codable, Equatable {
         if audio { args.append("/sound:sys:mac") }
         if microphone { args.append("/microphone") }
         if driveRedirect { args.append("/drive:home,~") }
-        // RDP scancodes: 0x38/0x138 = left/right Alt, 0x15b/0x15c = left/right Win.
-        if swapCmdOpt {
-            args.append("/kbd:remap:0x38=0x15b,remap:0x15b=0x38,remap:0x138=0x15c,remap:0x15c=0x138")
+        // RDP scancodes: 0x38/0x138 = left/right Alt, 0x15b/0x15c = left/right Win,
+        // 0x1d/0x11d = left/right Ctrl.
+        var remaps: [String] = []
+        if swapCmdOpt { remaps += ["0x38=0x15b", "0x15b=0x38", "0x138=0x15c", "0x15c=0x138"] }
+        if rightCtrlAsLeft { remaps.append("0x11d=0x1d") }
+        if !remaps.isEmpty {
+            args.append("/kbd:" + remaps.map { "remap:\($0)" }.joined(separator: ","))
         }
 
         let extras = extraArgs.split(whereSeparator: { $0 == " " || $0 == "\n" }).map(String.init)
@@ -698,6 +706,7 @@ struct ContentView: View {
                     Toggle("Use all monitors", isOn: $state.conn.multiMonitor)
                     Toggle("Send Cmd shortcuts to session", isOn: $state.conn.captureCmdKeys)
                     Toggle("Swap Cmd and Option (PC layout)", isOn: $state.conn.swapCmdOpt)
+                    Toggle("Send right Ctrl as left Ctrl", isOn: $state.conn.rightCtrlAsLeft)
                     Toggle("Reverse scroll direction", isOn: $state.conn.reverseScroll)
                     Toggle("Ignore certificate", isOn: $state.conn.ignoreCert)
                     Toggle("Share clipboard", isOn: $state.conn.clipboard)
