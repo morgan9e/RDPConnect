@@ -1,6 +1,11 @@
-// RDPConnect for Windows: Qt 6 Widgets front-end for sdl-freerdp.
-// Same settings, favorites.json/last.json and Credential Manager entries as the
-// GTK build, so data carries over.
+// RDPConnect: Qt 6 Widgets front-end for sdl-freerdp (Windows and Linux).
+// Same settings, favorites.json/last.json and keyring entries (Credential Manager
+// on Windows, the GTK build's libsecret schema on Linux), so data carries over.
+
+#ifndef _WIN32
+// Before Qt: GLib headers use "signals" as an identifier, which Qt defines as a macro.
+#include <libsecret/secret.h>
+#endif
 
 #include <QApplication>
 #include <QCheckBox>
@@ -31,8 +36,10 @@
 #include <QUuid>
 #include <QVBoxLayout>
 
+#ifdef _WIN32
 #include <windows.h>
 #include <wincred.h>
+#endif
 
 #include <algorithm>
 #include <cstdlib>
@@ -282,8 +289,10 @@ struct Favorite {
     Connection conn;
 };
 
-// Windows Credential Manager, generic credentials named "RDPConnect:<id>" (UTF-8 blob).
 namespace Keyring {
+
+#ifdef _WIN32
+// Windows Credential Manager, generic credentials named "RDPConnect:<id>" (UTF-8 blob).
 
 std::wstring target(const QString &id) { return ("RDPConnect:" + id).toStdWString(); }
 
@@ -315,10 +324,55 @@ QString lookup(const QString &id) {
     return secret;
 }
 
+#else
+// Secret Service via libsecret, same schema as the GTK build.
+const SecretSchema *schema() {
+    static const SecretSchema s = {
+        "com.example.RDPConnect", SECRET_SCHEMA_NONE,
+        { { "uuid", SECRET_SCHEMA_ATTRIBUTE_STRING }, { nullptr, SECRET_SCHEMA_ATTRIBUTE_STRING } },
+    };
+    return &s;
+}
+
+void warn(GError *error) {
+    if (!error) return;
+    qWarning("keyring: %s", error->message);
+    g_error_free(error);
+}
+
+void remove(const QString &id) {
+    GError *error = nullptr;
+    secret_password_clear_sync(schema(), nullptr, &error, "uuid", qUtf8Printable(id), nullptr);
+    warn(error);
+}
+
+void store(const QString &id, const QString &password) {
+    remove(id);
+    if (password.isEmpty()) return;
+    GError *error = nullptr;
+    secret_password_store_sync(schema(), SECRET_COLLECTION_DEFAULT, qUtf8Printable("RDPConnect: " + id),
+                               qUtf8Printable(password), nullptr, &error, "uuid", qUtf8Printable(id), nullptr);
+    warn(error);
+}
+
+QString lookup(const QString &id) {
+    GError *error = nullptr;
+    gchar *secret = secret_password_lookup_sync(schema(), nullptr, &error, "uuid", qUtf8Printable(id), nullptr);
+    warn(error);
+    QString result = QString::fromUtf8(secret);
+    secret_password_free(secret);
+    return result;
+}
+#endif
+
 } // namespace Keyring
 
 QString findBinary() {
+#ifdef _WIN32
     const QStringList names = { "sdl-freerdp", "sdl-freerdp3", "wfreerdp" };
+#else
+    const QStringList names = { "sdl-freerdp", "sdl-freerdp3" };
+#endif
     for (const auto &name : names) {
         QString p = QStandardPaths::findExecutable(name, { QCoreApplication::applicationDirPath() });
         if (!p.isEmpty()) return p;
@@ -354,8 +408,11 @@ bool writeJson(const QString &path, const QJsonDocument &doc, QString *error = n
     return false;
 }
 
+#ifdef _WIN32
 // Icon from a Segoe Fluent Icons (Windows 11) / Segoe MDL2 Assets (Windows 10) glyph.
-QIcon glyphIcon(char16_t glyph, const QColor &color) {
+using Glyph = char16_t;
+
+QIcon glyphIcon(Glyph glyph, const QColor &color) {
     QString family = QFontDatabase::hasFamily("Segoe Fluent Icons") ? "Segoe Fluent Icons"
                                                                     : "Segoe MDL2 Assets";
     QIcon icon;
@@ -373,11 +430,36 @@ QIcon glyphIcon(char16_t glyph, const QColor &color) {
     return icon;
 }
 
-constexpr char16_t GLYPH_VIEW = 0xE890;
-constexpr char16_t GLYPH_HIDE = 0xED1A;
-constexpr char16_t GLYPH_CONSOLE = 0xE756;
-constexpr char16_t GLYPH_SAVE = 0xE74E;
-constexpr char16_t GLYPH_DELETE = 0xE74D;
+constexpr Glyph GLYPH_VIEW = 0xE890;
+constexpr Glyph GLYPH_HIDE = 0xED1A;
+constexpr Glyph GLYPH_CONSOLE = 0xE756;
+constexpr Glyph GLYPH_SAVE = 0xE74E;
+constexpr Glyph GLYPH_DELETE = 0xE74D;
+#else
+// Symbolic icon from the desktop icon theme, recolored like the Windows glyphs.
+using Glyph = const char *;
+
+QIcon glyphIcon(Glyph name, const QColor &color) {
+    QIcon source = QIcon::fromTheme(name);
+    if (source.isNull()) return {};
+    QIcon icon;
+    for (int px : { 16, 20, 24, 32, 40, 48 }) {
+        QPixmap pm = source.pixmap(px, px);
+        QPainter p(&pm);
+        p.setCompositionMode(QPainter::CompositionMode_SourceIn);
+        p.fillRect(pm.rect(), color);
+        p.end();
+        icon.addPixmap(pm);
+    }
+    return icon;
+}
+
+constexpr Glyph GLYPH_VIEW = "view-reveal-symbolic";
+constexpr Glyph GLYPH_HIDE = "view-conceal-symbolic";
+constexpr Glyph GLYPH_CONSOLE = "utilities-terminal-symbolic";
+constexpr Glyph GLYPH_SAVE = "document-save-symbolic";
+constexpr Glyph GLYPH_DELETE = "user-trash-symbolic";
+#endif
 
 class LogWindow : public QWidget {
 public:
@@ -896,8 +978,13 @@ private:
         }
         if (binary.isEmpty()) {
             setStatus("sdl-freerdp not found.");
+#ifdef _WIN32
             appendLog("sdl-freerdp not found. Put sdl-freerdp.exe next to rdpconnect.exe, "
                       "or install it with MSYS2 (pacman -S mingw-w64-ucrt-x86_64-freerdp).");
+#else
+            appendLog("sdl-freerdp not found. Install it with your "
+                      "package manager (e.g. dnf install freerdp).");
+#endif
             return;
         }
         Connection conn = formToConn();
@@ -992,6 +1079,10 @@ int main(int argc, char *argv[]) {
     QApplication app(argc, argv);
     QApplication::setApplicationName("RDPConnect");
     QApplication::setOrganizationName("RDPConnect");
+#ifndef _WIN32
+    QGuiApplication::setDesktopFileName("com.example.RDPConnect");
+    QApplication::setWindowIcon(QIcon::fromTheme("rdpconnect"));
+#endif
 
     MainWindow win;
     win.show();

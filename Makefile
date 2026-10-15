@@ -14,6 +14,9 @@ LINUX_ID  := com.example.RDPConnect
 DESKTOP   := $(VALA_DIR)/$(LINUX_ID).desktop
 ICON      := $(VALA_DIR)/icon.png
 VALA_PKGS := --pkg gtk4 --pkg libadwaita-1 --pkg libsecret-1 --pkg json-glib-1.0 --pkg posix
+QT_DIR    := Windows
+QT_BIN    := rdpconnect-qt
+QT_PKGS   := Qt6Widgets libsecret-1
 
 ifeq ($(UNAME),Darwin)
 VALAFLAGS += $(if $(wildcard /opt/homebrew/share/vala/vapi),--vapidir /opt/homebrew/share/vala/vapi,)
@@ -47,6 +50,12 @@ vala: $(BIN)
 
 $(BIN): $(VALA_DIR)/main.vala
 	valac $(VALAFLAGS) $(VALA_PKGS) -X -O2 -X -w -o $(BIN) $(VALA_DIR)/main.vala
+
+qt: $(QT_BIN)
+
+$(QT_BIN): $(QT_DIR)/main.cpp
+	$(CXX) -std=c++17 -O2 -fPIC $(CXXFLAGS) $(shell pkg-config --cflags $(QT_PKGS)) \
+		-o $(QT_BIN) $(QT_DIR)/main.cpp $(LDFLAGS) $(shell pkg-config --libs $(QT_PKGS))
 
 swift: $(APP)
 
@@ -112,6 +121,6 @@ run: $(BIN)
 endif
 
 clean:
-	rm -rf $(APP) $(APP_NAME) $(BIN)
+	rm -rf $(APP) $(APP_NAME) $(BIN) $(QT_BIN)
 
-.PHONY: all build macos linux vala swift package cert install uninstall run clean
+.PHONY: all build macos linux vala qt swift package cert install uninstall run clean
