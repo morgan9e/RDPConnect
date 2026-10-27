@@ -183,8 +183,7 @@ struct Connection: Codable, Equatable {
         if !password.isEmpty { args.append("/p:\(password)") }
 
         let isFullscreen = opensFullscreen
-        var base: (w: Int, h: Int)?
-        var remote: (w: Int, h: Int)?
+        let base: (w: Int, h: Int)?
         if resolution == "Fullscreen" {
             base = screenSize
         } else {
@@ -193,23 +192,23 @@ struct Connection: Codable, Equatable {
                 return .failure("Invalid resolution '\(sizeString)'. Use WIDTHxHEIGHT, e.g. 1920x1200.")
             }
             base = size
-            if isScaledFullscreen {
-                base = screenSize
-                remote = size
-            }
         }
 
         func even(_ n: Int) -> Int { max(n - (n % 2), 2) }
         func sizeArgs() {
-            if isFullscreen && !nativeFullscreen { args.append("/f") }
+            // A scaled fullscreen keeps its fixed remote size; smart-sizing stretches it.
+            if isScaledFullscreen, let b = base {
+                args.append("/w:\(even(b.w))"); args.append("/h:\(even(b.h))")
+                if !nativeFullscreen { args.append("/f") }
+            } else if isFullscreen && !nativeFullscreen { args.append("/f") }
             else if let b = base { args.append("/w:\(even(b.w))"); args.append("/h:\(even(b.h))") }
         }
 
         switch displayMode {
         case .scale:
             sizeArgs()
-            if let r = remote {
-                args.append("/smart-sizing:\(even(r.w))x\(even(r.h))")
+            if isScaledFullscreen {
+                args.append("/smart-sizing")
             } else if let b = base {
                 let sw = even(max(Int((Double(b.w) / scaleFactor).rounded()), 320))
                 let sh = even(max(Int((Double(b.h) / scaleFactor).rounded()), 240))
