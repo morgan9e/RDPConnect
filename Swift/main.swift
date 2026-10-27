@@ -42,6 +42,8 @@ struct Connection: Codable, Equatable {
     var customScale = "150"
     var serverScale = "100"
     var customServerScale = "150"
+    /// Scale mode with a fixed resolution: keep that remote size but fill the screen.
+    var scaleFullscreen = false
     var multiMonitor = false
 
     var ignoreCert = true
@@ -86,6 +88,12 @@ struct Connection: Codable, Equatable {
     var scaleFactor: Double { Double(scalePercent) / 100 }
 
     var serverScalePercent: Int { Connection.percent(serverScale, customServerScale) }
+
+    /// Fixed remote resolution stretched over a fullscreen window.
+    var isScaledFullscreen: Bool {
+        resolution != "Fullscreen" && displayMode == .scale && scaleFullscreen
+    }
+    var opensFullscreen: Bool { resolution == "Fullscreen" || isScaledFullscreen }
 
     static func parseSize(_ s: String) -> (w: Int, h: Int)? {
         let parts = s.lowercased()
@@ -141,6 +149,7 @@ struct Connection: Codable, Equatable {
         customScale = s(.customScale, "150")
         serverScale = s(.serverScale, "100")
         customServerScale = s(.customServerScale, "150")
+        scaleFullscreen = b(.scaleFullscreen, false)
         multiMonitor = b(.multiMonitor, false)
         ignoreCert = b(.ignoreCert, true)
         clipboard = b(.clipboard, true)
@@ -173,9 +182,10 @@ struct Connection: Codable, Equatable {
 
         if !password.isEmpty { args.append("/p:\(password)") }
 
-        let isFullscreen = (resolution == "Fullscreen")
-        let base: (w: Int, h: Int)?
-        if isFullscreen {
+        let isFullscreen = opensFullscreen
+        var base: (w: Int, h: Int)?
+        var remote: (w: Int, h: Int)?
+        if resolution == "Fullscreen" {
             base = screenSize
         } else {
             let sizeString = (resolution == Connection.customResolution) ? customResolution : resolution
@@ -183,6 +193,10 @@ struct Connection: Codable, Equatable {
                 return .failure("Invalid resolution '\(sizeString)'. Use WIDTHxHEIGHT, e.g. 1920x1200.")
             }
             base = size
+            if isScaledFullscreen {
+                base = screenSize
+                remote = size
+            }
         }
 
         func even(_ n: Int) -> Int { max(n - (n % 2), 2) }
@@ -194,7 +208,9 @@ struct Connection: Codable, Equatable {
         switch displayMode {
         case .scale:
             sizeArgs()
-            if let b = base {
+            if let r = remote {
+                args.append("/smart-sizing:\(even(r.w))x\(even(r.h))")
+            } else if let b = base {
                 let sw = even(max(Int((Double(b.w) / scaleFactor).rounded()), 320))
                 let sh = even(max(Int((Double(b.h) / scaleFactor).rounded()), 240))
                 args.append("/smart-sizing:\(sw)x\(sh)")
@@ -599,7 +615,7 @@ final class AppState: ObservableObject {
         }
         // /f makes SDL animate into a Space after the first frame and leaves the window
         // blank until a manual toggle; instead open screen-sized and fullscreen it via AX.
-        let nativeFullscreen = conn.resolution == "Fullscreen" && AXIsProcessTrusted()
+        let nativeFullscreen = conn.opensFullscreen && AXIsProcessTrusted()
         switch conn.buildArguments(screenSize: AppState.nativeScreenSize(),
                                    nativeFullscreen: nativeFullscreen) {
         case .failure(let msg):
@@ -617,7 +633,7 @@ final class AppState: ObservableObject {
 
         var env = ProcessInfo.processInfo.environment
         // Keep the menu bar and Dock from sliding in at screen edges in fullscreen.
-        let hideUI = conn.resolution == "Fullscreen"
+        let hideUI = conn.opensFullscreen
         if conn.captureCmdKeys || hideUI, let zap = AppState.findMenuZap() {
             let existing = env["DYLD_INSERT_LIBRARIES"]
             env["DYLD_INSERT_LIBRARIES"] = existing.map { "\(zap):\($0)" } ?? zap
@@ -760,7 +776,10 @@ struct ContentView: View {
                     Picker("Mode", selection: $state.conn.displayMode) {
                         ForEach(DisplayMode.allCases) { Text($0.label).tag($0) }
                     }
-                    if state.conn.displayMode == .scale {
+                    if state.conn.displayMode == .scale && state.conn.resolution != "Fullscreen" {
+                        Toggle("Fullscreen", isOn: $state.conn.scaleFullscreen)
+                    }
+                    if state.conn.displayMode == .scale && !state.conn.isScaledFullscreen {
                         Picker("Client scale", selection: $state.conn.clientScale) {
                             ForEach(Connection.scalePresets, id: \.self) { p in
                                 Text(p == Connection.customScale ? "Custom..." : "\(p)%").tag(p)
