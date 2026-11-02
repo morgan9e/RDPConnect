@@ -14,7 +14,7 @@ LINUX_ID  := com.example.RDPConnect
 DESKTOP   := $(VALA_DIR)/$(LINUX_ID).desktop
 ICON      := $(VALA_DIR)/icon.png
 VALA_PKGS := --pkg gtk4 --pkg libadwaita-1 --pkg libsecret-1 --pkg json-glib-1.0 --pkg posix
-QT_DIR    := Windows
+QT_DIR    := Qt
 QT_BIN    := rdpconnect-qt
 QT_PKGS   := Qt6Widgets libsecret-1
 
