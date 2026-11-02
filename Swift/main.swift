@@ -259,17 +259,26 @@ struct Favorite: Codable, Identifiable, Equatable {
 enum Keychain {
     static let service = "RDPConnect"
 
+    /// Updates the item in place rather than delete + add: deleting is gated by the item's
+    /// owner ACL, which macOS confirms with the keychain password on every call, while
+    /// reading and writing the data honor "Always Allow".
     static func set(_ password: String, for id: UUID) {
         let base: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
             kSecAttrAccount as String: id.uuidString,
         ]
-        SecItemDelete(base as CFDictionary)
-        guard !password.isEmpty, let data = password.data(using: .utf8) else { return }
-        var add = base
-        add[kSecValueData as String] = data
-        SecItemAdd(add as CFDictionary, nil)
+        guard !password.isEmpty, let data = password.data(using: .utf8) else {
+            if !get(for: id).isEmpty { SecItemDelete(base as CFDictionary) }
+            return
+        }
+        if get(for: id) == password { return }
+        let status = SecItemUpdate(base as CFDictionary, [kSecValueData as String: data] as CFDictionary)
+        if status == errSecItemNotFound {
+            var add = base
+            add[kSecValueData as String] = data
+            SecItemAdd(add as CFDictionary, nil)
+        }
     }
 
     static func get(for id: UUID) -> String {
