@@ -2,5 +2,8 @@
 /RDPConnect
 /rdpconnect
 /rdpconnect-qt
+/rdpconnect.exe
+/rdpconnect-res.o
+/dist/
 
 .DS_Store
