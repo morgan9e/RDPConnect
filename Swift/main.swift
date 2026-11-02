@@ -487,7 +487,7 @@ final class AppState: ObservableObject {
             try fm.createDirectory(at: resources, withIntermediateDirectories: true)
             var plist: [String: Any] = [
                 "CFBundleExecutable": "sdl-freerdp",
-                "CFBundleIdentifier": (Bundle.main.bundleIdentifier ?? "com.example.RDPConnect") + ".session",
+                "CFBundleIdentifier": (Bundle.main.bundleIdentifier ?? "dev.m4n.RDPConnect") + ".session",
                 "CFBundleName": "RDP Session",
                 "CFBundlePackageType": "APPL",
                 "NSHighResolutionCapable": true,

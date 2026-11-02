@@ -2,6 +2,23 @@
 
 ## Simple FreeRDP frontend: Linux (GTK), macOS (Swift) and Windows (Qt).
 
+## macOS
+
+```sh
+make install       # build RDPConnect.app into ~/Applications
+make sign          # re-sign with hardened runtime + secure timestamp
+make notarize      # sign, notarize with Apple and staple the ticket
+```
+
+Builds are signed with your Developer ID Application identity if present, else Apple
+Development, else ad-hoc. A team identity keeps keychain "Always Allow" and Accessibility
+grants across rebuilds; ad-hoc builds ask again after every rebuild. `make notarize` needs a
+Developer ID Application identity and a stored notarytool profile (once):
+
+```sh
+xcrun notarytool store-credentials RDPConnect --apple-id <apple-id> --team-id <team-id>
+```
+
 ## Windows
 
 A native Qt 6 Widgets app (`Qt/main.cpp`, also buildable on Linux with `make qt`) that uses

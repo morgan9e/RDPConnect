@@ -4,7 +4,7 @@
 <dict>
     <key>CFBundleName</key>            <string>RDPConnect</string>
     <key>CFBundleDisplayName</key>     <string>RDPConnect</string>
-    <key>CFBundleIdentifier</key>      <string>com.example.RDPConnect</string>
+    <key>CFBundleIdentifier</key>      <string>dev.m4n.RDPConnect</string>
     <key>CFBundleExecutable</key>      <string>RDPConnect</string>
     <key>CFBundleIconFile</key>        <string>AppIcon</string>
     <key>CFBundlePackageType</key>     <string>APPL</string>

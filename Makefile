@@ -57,12 +57,18 @@ APP        := $(APP_NAME).app
 APPDIR     ?= $(HOME)/Applications
 
 ifeq ($(UNAME),Darwin)
-MAC_BUNDLE_ID := com.example.RDPConnect
+MAC_BUNDLE_ID := dev.m4n.RDPConnect
 
-# Sign with an Apple Development identity (free Apple ID works): its Team ID keeps keychain
-# and Accessibility grants stable across rebuilds. Falls back to ad-hoc signing.
+# Sign with a team identity so keychain "Always Allow" and Accessibility grants survive
+# rebuilds and reinstalls: Developer ID Application (required by `make notarize`), else
+# Apple Development (free Apple ID works), else ad-hoc, which changes identity every build.
+DEV_ID_APP   := $(shell security find-identity -v -p codesigning 2>/dev/null | awk '/"Developer ID Application/ {print $$2; exit}')
 APPLE_DEV_ID := $(shell security find-identity -v -p codesigning 2>/dev/null | awk '/"Apple Development/ {print $$2; exit}')
-CODESIGN_ID ?= $(or $(APPLE_DEV_ID),-)
+CODESIGN_ID ?= $(or $(DEV_ID_APP),$(APPLE_DEV_ID),-)
+
+# One-time setup: xcrun notarytool store-credentials RDPConnect --apple-id <id> --team-id <team>
+NOTARY_PROFILE ?= RDPConnect
+NOTARY_ZIP     := $(APP_NAME)-notarize.zip
 
 DEPLOY ?= $(shell sw_vers -productVersion | cut -d. -f1).0
 TARGET  = $(shell uname -m)-apple-macos$(DEPLOY)
@@ -142,6 +148,22 @@ $(APP): $(SWIFT_DIR)/main.swift $(SWIFT_DIR)/Info.plist $(SWIFT_DIR)/AppIcon.icn
 
 ifeq ($(UNAME),Darwin)
 
+# Release signature: hardened runtime and secure timestamp, as notarization requires.
+sign: $(APP)
+	$(if $(filter -,$(CODESIGN_ID)),$(error No signing identity found; make sign needs Developer ID Application or Apple Development))
+	codesign --force --options runtime --timestamp --sign "$(CODESIGN_ID)" $(APP)/Contents/Resources/menuzap.dylib
+	codesign --force --options runtime --timestamp --identifier $(MAC_BUNDLE_ID) --sign "$(CODESIGN_ID)" $(APP)
+	codesign --verify --strict --verbose=2 $(APP)
+
+notarize: sign
+	$(if $(filter $(DEV_ID_APP),$(CODESIGN_ID)),,$(error make notarize needs a Developer ID Application identity))
+	rm -f $(NOTARY_ZIP)
+	ditto -c -k --keepParent $(APP) $(NOTARY_ZIP)
+	xcrun notarytool submit $(NOTARY_ZIP) --keychain-profile "$(NOTARY_PROFILE)" --wait
+	rm -f $(NOTARY_ZIP)
+	xcrun stapler staple $(APP)
+	spctl --assess --type execute --verbose=2 $(APP)
+
 install: $(APP)
 	mkdir -p "$(APPDIR)"
 	rm -rf "$(APPDIR)/$(APP)"
@@ -191,6 +213,6 @@ run: $(BIN)
 endif
 
 clean:
-	rm -rf $(APP) $(APP_NAME) $(BIN) $(QT_BIN) $(WIN_RES) dist
+	rm -rf $(APP) $(APP_NAME) $(NOTARY_ZIP) $(BIN) $(QT_BIN) $(WIN_RES) dist
 
-.PHONY: all build macos linux windows windows-run vala qt swift package dist install uninstall run clean
+.PHONY: all build macos linux windows windows-run vala qt swift package sign notarize dist install uninstall run clean
