@@ -66,8 +66,9 @@ DEV_ID_APP   := $(shell security find-identity -v -p codesigning 2>/dev/null | a
 APPLE_DEV_ID := $(shell security find-identity -v -p codesigning 2>/dev/null | awk '/"Apple Development/ {print $$2; exit}')
 CODESIGN_ID ?= $(or $(DEV_ID_APP),$(APPLE_DEV_ID),-)
 
-# One-time setup: xcrun notarytool store-credentials RDPConnect --apple-id <id> --team-id <team>
-NOTARY_PROFILE ?= RDPConnect
+# notarytool keychain profile (App Store Connect API key); create once with:
+#   xcrun notarytool store-credentials notarytool --key AuthKey_<id>.p8 --key-id <id> --issuer <uuid>
+NOTARY_PROFILE ?= notarytool
 NOTARY_ZIP     := $(APP_NAME)-notarize.zip
 
 DEPLOY ?= $(shell sw_vers -productVersion | cut -d. -f1).0

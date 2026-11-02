@@ -13,10 +13,11 @@ make notarize      # sign, notarize with Apple and staple the ticket
 Builds are signed with your Developer ID Application identity if present, else Apple
 Development, else ad-hoc. A team identity keeps keychain "Always Allow" and Accessibility
 grants across rebuilds; ad-hoc builds ask again after every rebuild. `make notarize` needs a
-Developer ID Application identity and a stored notarytool profile (once):
+Developer ID Application identity and a notarytool keychain profile, `notarytool` by default
+(`NOTARY_PROFILE=...` to override), created once from an App Store Connect API key:
 
 ```sh
-xcrun notarytool store-credentials RDPConnect --apple-id <apple-id> --team-id <team-id>
+xcrun notarytool store-credentials notarytool --key AuthKey_<id>.p8 --key-id <id> --issuer <uuid>
 ```
 
 ## Windows
