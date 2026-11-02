@@ -42,6 +42,8 @@ struct Connection: Codable, Equatable {
     var customScale = "150"
     var serverScale = "100"
     var customServerScale = "150"
+    /// Scale mode with a fixed resolution: keep that remote size but fill the screen.
+    var scaleFullscreen = false
     var multiMonitor = false
 
     var ignoreCert = true
@@ -53,6 +55,13 @@ struct Connection: Codable, Equatable {
     var captureCmdKeys = true
 
     var reverseScroll = false
+
+    /// Swap ⌘ and ⌥ by position, PC-style: ⌘ → Alt (right ⌘ → AltGr),
+    /// ⌥ → Win/Super. Done via FreeRDP's RDP-scancode remap.
+    var swapCmdOpt = false
+
+    /// Send right Ctrl as left Ctrl; Korean server layouts turn right Ctrl into Hanja.
+    var rightCtrlAsLeft = false
 
     var extraArgs = ""
 
@@ -79,6 +88,12 @@ struct Connection: Codable, Equatable {
     var scaleFactor: Double { Double(scalePercent) / 100 }
 
     var serverScalePercent: Int { Connection.percent(serverScale, customServerScale) }
+
+    /// Fixed remote resolution stretched over a fullscreen window.
+    var isScaledFullscreen: Bool {
+        resolution != "Fullscreen" && displayMode == .scale && scaleFullscreen
+    }
+    var opensFullscreen: Bool { resolution == "Fullscreen" || isScaledFullscreen }
 
     static func parseSize(_ s: String) -> (w: Int, h: Int)? {
         let parts = s.lowercased()
@@ -134,6 +149,7 @@ struct Connection: Codable, Equatable {
         customScale = s(.customScale, "150")
         serverScale = s(.serverScale, "100")
         customServerScale = s(.customServerScale, "150")
+        scaleFullscreen = b(.scaleFullscreen, false)
         multiMonitor = b(.multiMonitor, false)
         ignoreCert = b(.ignoreCert, true)
         clipboard = b(.clipboard, true)
@@ -142,10 +158,15 @@ struct Connection: Codable, Equatable {
         driveRedirect = b(.driveRedirect, false)
         captureCmdKeys = b(.captureCmdKeys, true)
         reverseScroll = b(.reverseScroll, false)
+        swapCmdOpt = b(.swapCmdOpt, false)
+        rightCtrlAsLeft = b(.rightCtrlAsLeft, false)
         extraArgs = s(.extraArgs, "")
     }
 
-    func buildArguments(screenSize: (w: Int, h: Int)? = nil) -> Result<[String], String> {
+    /// With `nativeFullscreen`, a fullscreen session opens as a screen-sized window instead of
+    /// using /f, and the caller fullscreens it through Accessibility (see `AppState.launch`).
+    func buildArguments(screenSize: (w: Int, h: Int)? = nil,
+                        nativeFullscreen: Bool = false) -> Result<[String], String> {
         let trimmedHost = host.trimmingCharacters(in: .whitespaces)
         guard !trimmedHost.isEmpty else { return .failure("Server address is required.") }
 
@@ -161,9 +182,9 @@ struct Connection: Codable, Equatable {
 
         if !password.isEmpty { args.append("/p:\(password)") }
 
-        let isFullscreen = (resolution == "Fullscreen")
+        let isFullscreen = opensFullscreen
         let base: (w: Int, h: Int)?
-        if isFullscreen {
+        if resolution == "Fullscreen" {
             base = screenSize
         } else {
             let sizeString = (resolution == Connection.customResolution) ? customResolution : resolution
@@ -174,12 +195,21 @@ struct Connection: Codable, Equatable {
         }
 
         func even(_ n: Int) -> Int { max(n - (n % 2), 2) }
+        func sizeArgs() {
+            // A scaled fullscreen keeps its fixed remote size; smart-sizing stretches it.
+            if isScaledFullscreen, let b = base {
+                args.append("/w:\(even(b.w))"); args.append("/h:\(even(b.h))")
+                if !nativeFullscreen { args.append("/f") }
+            } else if isFullscreen && !nativeFullscreen { args.append("/f") }
+            else if let b = base { args.append("/w:\(even(b.w))"); args.append("/h:\(even(b.h))") }
+        }
 
         switch displayMode {
         case .scale:
-            if isFullscreen { args.append("/f") }
-            else if let b = base { args.append("/w:\(even(b.w))"); args.append("/h:\(even(b.h))") }
-            if let b = base {
+            sizeArgs()
+            if isScaledFullscreen {
+                args.append("/smart-sizing")
+            } else if let b = base {
                 let sw = even(max(Int((Double(b.w) / scaleFactor).rounded()), 320))
                 let sh = even(max(Int((Double(b.h) / scaleFactor).rounded()), 240))
                 args.append("/smart-sizing:\(sw)x\(sh)")
@@ -187,12 +217,10 @@ struct Connection: Codable, Equatable {
                 args.append("/smart-sizing")
             }
         case .dynamic:
-            if isFullscreen { args.append("/f") }
-            else if let b = base { args.append("/w:\(even(b.w))"); args.append("/h:\(even(b.h))") }
+            sizeArgs()
             args.append("/dynamic-resolution")
         case .fixed:
-            if isFullscreen { args.append("/f") }
-            else if let b = base { args.append("/w:\(even(b.w))"); args.append("/h:\(even(b.h))") }
+            sizeArgs()
         }
 
         if serverScalePercent != 100 {
@@ -205,6 +233,15 @@ struct Connection: Codable, Equatable {
         if audio { args.append("/sound:sys:mac") }
         if microphone { args.append("/microphone") }
         if driveRedirect { args.append("/drive:home,~") }
+        // RDP scancodes in decimal, since FreeRDP rejects remap entries over 10 chars:
+        // 56/312 = left/right Alt (0x38/0x138), 347/348 = left/right Win (0x15b/0x15c),
+        // 29/285 = left/right Ctrl (0x1d/0x11d).
+        var remaps: [String] = []
+        if swapCmdOpt { remaps += ["56=347", "347=56", "312=348", "348=312"] }
+        if rightCtrlAsLeft { remaps.append("285=29") }
+        if !remaps.isEmpty {
+            args.append("/kbd:" + remaps.map { "remap:\($0)" }.joined(separator: ","))
+        }
 
         let extras = extraArgs.split(whereSeparator: { $0 == " " || $0 == "\n" }).map(String.init)
         args.append(contentsOf: extras)
@@ -424,6 +461,50 @@ final class AppState: ObservableObject {
             .first { FileManager.default.isExecutableFile(atPath: $0) }
     }
 
+    /// Homebrew's sdl-freerdp is a bare executable, so macOS leaves it out of the app
+    /// switcher. Run a clone of it from inside a minimal .app bundle instead, refreshed
+    /// whenever the original changes (e.g. after `brew upgrade`).
+    static func bundledSession(for binary: String) -> String {
+        let fm = FileManager.default
+        let source = URL(fileURLWithPath: binary).resolvingSymlinksInPath()
+        let app = supportDir().appendingPathComponent("RDP Session.app", isDirectory: true)
+        let contents = app.appendingPathComponent("Contents", isDirectory: true)
+        let exe = contents.appendingPathComponent("MacOS/sdl-freerdp")
+        let stamp = contents.appendingPathComponent("source.txt")
+
+        let attrs = try? fm.attributesOfItem(atPath: source.path)
+        let size = (attrs?[.size] as? NSNumber)?.int64Value ?? -1
+        let mtime = (attrs?[.modificationDate] as? Date)?.timeIntervalSince1970 ?? 0
+        let wanted = "\(source.path)\n\(size)\n\(mtime)"
+        if (try? String(contentsOf: stamp, encoding: .utf8)) == wanted,
+           fm.isExecutableFile(atPath: exe.path) { return exe.path }
+
+        do {
+            try? fm.removeItem(at: app)
+            try fm.createDirectory(at: exe.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try fm.copyItem(at: source, to: exe)
+            let resources = contents.appendingPathComponent("Resources", isDirectory: true)
+            try fm.createDirectory(at: resources, withIntermediateDirectories: true)
+            var plist: [String: Any] = [
+                "CFBundleExecutable": "sdl-freerdp",
+                "CFBundleIdentifier": (Bundle.main.bundleIdentifier ?? "com.example.RDPConnect") + ".session",
+                "CFBundleName": "RDP Session",
+                "CFBundlePackageType": "APPL",
+                "NSHighResolutionCapable": true,
+            ]
+            if let icon = Bundle.main.url(forResource: "AppIcon", withExtension: "icns") {
+                try? fm.copyItem(at: icon, to: resources.appendingPathComponent("AppIcon.icns"))
+                plist["CFBundleIconFile"] = "AppIcon"
+            }
+            let data = try PropertyListSerialization.data(fromPropertyList: plist, format: .xml, options: 0)
+            try data.write(to: contents.appendingPathComponent("Info.plist"))
+            try wanted.write(to: stamp, atomically: true, encoding: .utf8)
+            return exe.path
+        } catch {
+            return binary
+        }
+    }
+
     static func findMenuZap() -> String? {
         if let u = Bundle.main.url(forResource: "menuzap", withExtension: "dylib"),
            FileManager.default.fileExists(atPath: u.path) { return u.path }
@@ -531,27 +612,37 @@ final class AppState: ObservableObject {
             append("sdl-freerdp not found. Install it with: brew install freerdp")
             return
         }
-        switch conn.buildArguments(screenSize: AppState.nativeScreenSize()) {
+        // /f makes SDL animate into a Space after the first frame and leaves the window
+        // blank until a manual toggle; instead open screen-sized and fullscreen it via AX.
+        let nativeFullscreen = conn.opensFullscreen && AXIsProcessTrusted()
+        switch conn.buildArguments(screenSize: AppState.nativeScreenSize(),
+                                   nativeFullscreen: nativeFullscreen) {
         case .failure(let msg):
             status = msg
         case .success(let args):
             persistLast()
-            launch(binary: binary, args: args)
+            launch(binary: binary, args: args, fullscreen: nativeFullscreen)
         }
     }
 
-    private func launch(binary: String, args: [String]) {
+    private func launch(binary: String, args: [String], fullscreen: Bool) {
         let proc = Process()
-        proc.executableURL = URL(fileURLWithPath: binary)
+        proc.executableURL = URL(fileURLWithPath: AppState.bundledSession(for: binary))
         proc.arguments = args
 
-        if conn.captureCmdKeys, let zap = AppState.findMenuZap() {
-            var env = ProcessInfo.processInfo.environment
+        var env = ProcessInfo.processInfo.environment
+        // Keep the menu bar and Dock from sliding in at screen edges in fullscreen.
+        let hideUI = conn.opensFullscreen
+        if conn.captureCmdKeys || hideUI, let zap = AppState.findMenuZap() {
             let existing = env["DYLD_INSERT_LIBRARIES"]
             env["DYLD_INSERT_LIBRARIES"] = existing.map { "\(zap):\($0)" } ?? zap
-            proc.environment = env
-            append("Menu shortcuts routed to the session.")
+            if conn.captureCmdKeys {
+                env["RDPCONNECT_MENUZAP"] = "1"
+                append("Menu shortcuts routed to the session.")
+            }
+            if hideUI { env["RDPCONNECT_HIDE_FS_UI"] = "1" }
         }
+        proc.environment = env
 
         let shown = args.map { $0.hasPrefix("/p:") ? "/p:******" : $0 }
         append("run: \(binary) \(shown.joined(separator: " "))")
@@ -572,6 +663,8 @@ final class AppState: ObservableObject {
                 pipe.fileHandleForReading.readabilityHandler = nil
                 self.status = "Session ended (exit \(p.terminationStatus))."
                 self.append("Session ended (exit code \(p.terminationStatus))")
+                NSApp.unhide(nil)
+                NSApp.activate(ignoringOtherApps: true)
             }
         }
         do {
@@ -579,6 +672,7 @@ final class AppState: ObservableObject {
             process = proc
             isRunning = true
             status = "Connected to \(conn.host)."
+            NSApp.hide(nil)
 
             if conn.captureCmdKeys || conn.reverseScroll {
                 grabber.captureCmd = conn.captureCmdKeys
@@ -591,13 +685,42 @@ final class AppState: ObservableObject {
                     if conn.reverseScroll { append("Scroll direction reversed for the session") }
                 }
             }
+            if fullscreen { fullscreenWhenReady(pid: proc.processIdentifier) }
         } catch {
             status = "Failed to launch."
             append("Failed to launch: \(error.localizedDescription)")
         }
     }
 
-    func disconnect() { process?.terminate() }
+    /// Waits for the session's main window and puts it into native fullscreen, the same as
+    /// clicking the green button. Small windows (credential prompts, errors) are skipped.
+    private func fullscreenWhenReady(pid: pid_t) {
+        let app = AXUIElementCreateApplication(pid)
+        let fullScreen = "AXFullScreen" as CFString
+        let minWidth = (NSScreen.main?.visibleFrame.width ?? 800) * 0.8
+        Task { @MainActor in
+            for _ in 0..<300 {
+                try? await Task.sleep(nanoseconds: 200_000_000)
+                guard let p = process, p.processIdentifier == pid else { return }
+                var value: CFTypeRef?
+                guard AXUIElementCopyAttributeValue(app, kAXWindowsAttribute as CFString, &value) == .success,
+                      let windows = value as? [AXUIElement] else { continue }
+                for win in windows {
+                    var sizeRef: CFTypeRef?
+                    var size = CGSize.zero
+                    guard AXUIElementCopyAttributeValue(win, kAXSizeAttribute as CFString, &sizeRef) == .success,
+                          let sizeRef, AXValueGetValue(sizeRef as! AXValue, .cgSize, &size),
+                          size.width >= minWidth else { continue }
+                    var fs: CFTypeRef?
+                    if AXUIElementCopyAttributeValue(win, fullScreen, &fs) == .success,
+                       (fs as? Bool) == true { return }
+                    AXUIElementSetAttributeValue(win, fullScreen, kCFBooleanTrue)
+                }
+            }
+        }
+    }
+
+        func disconnect() { process?.terminate() }
 }
 
 struct ContentView: View {
@@ -652,7 +775,10 @@ struct ContentView: View {
                     Picker("Mode", selection: $state.conn.displayMode) {
                         ForEach(DisplayMode.allCases) { Text($0.label).tag($0) }
                     }
-                    if state.conn.displayMode == .scale {
+                    if state.conn.displayMode == .scale && state.conn.resolution != "Fullscreen" {
+                        Toggle("Fullscreen", isOn: $state.conn.scaleFullscreen)
+                    }
+                    if state.conn.displayMode == .scale && !state.conn.isScaledFullscreen {
                         Picker("Client scale", selection: $state.conn.clientScale) {
                             ForEach(Connection.scalePresets, id: \.self) { p in
                                 Text(p == Connection.customScale ? "Custom..." : "\(p)%").tag(p)
@@ -683,6 +809,8 @@ struct ContentView: View {
                     TextField("Domain", text: $state.conn.domain)
                     Toggle("Use all monitors", isOn: $state.conn.multiMonitor)
                     Toggle("Send Cmd shortcuts to session", isOn: $state.conn.captureCmdKeys)
+                    Toggle("Swap Cmd and Option (PC layout)", isOn: $state.conn.swapCmdOpt)
+                    Toggle("Send right Ctrl as left Ctrl", isOn: $state.conn.rightCtrlAsLeft)
                     Toggle("Reverse scroll direction", isOn: $state.conn.reverseScroll)
                     Toggle("Ignore certificate", isOn: $state.conn.ignoreCert)
                     Toggle("Share clipboard", isOn: $state.conn.clipboard)

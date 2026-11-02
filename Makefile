@@ -28,8 +28,10 @@ APPDIR     ?= $(HOME)/Applications
 ifeq ($(UNAME),Darwin)
 MAC_BUNDLE_ID := com.example.RDPConnect
 
-CERT_NAME   := RDPConnect Self-Signed
-CODESIGN_ID ?= $(shell security find-certificate -c "$(CERT_NAME)" >/dev/null 2>&1 && echo "$(CERT_NAME)" || echo "-")
+# Sign with an Apple Development identity (free Apple ID works): its Team ID keeps keychain
+# and Accessibility grants stable across rebuilds. Falls back to ad-hoc signing.
+APPLE_DEV_ID := $(shell security find-identity -v -p codesigning 2>/dev/null | awk '/"Apple Development/ {print $$2; exit}')
+CODESIGN_ID ?= $(or $(APPLE_DEV_ID),-)
 
 DEPLOY ?= $(shell sw_vers -productVersion | cut -d. -f1).0
 TARGET  = $(shell uname -m)-apple-macos$(DEPLOY)
@@ -72,20 +74,6 @@ $(APP): $(SWIFT_DIR)/main.swift $(SWIFT_DIR)/Info.plist $(SWIFT_DIR)/AppIcon.icn
 	codesign --force --sign "$(CODESIGN_ID)" $(APP)/Contents/Resources/menuzap.dylib
 	codesign --force --identifier $(MAC_BUNDLE_ID) --sign "$(CODESIGN_ID)" $(APP)
 
-cert:
-	@if ! security find-certificate -c "$(CERT_NAME)" >/dev/null 2>&1; then \
-		tmp=$$(mktemp -d); \
-		openssl genrsa -out $$tmp/k.key 2048 2>/dev/null; \
-		openssl req -x509 -new -key $$tmp/k.key -days 3650 -out $$tmp/c.crt \
-			-subj "/CN=$(CERT_NAME)" \
-			-addext "basicConstraints=critical,CA:false" \
-			-addext "keyUsage=critical,digitalSignature" \
-			-addext "extendedKeyUsage=critical,codeSigning" 2>/dev/null; \
-		openssl pkcs12 -export -legacy -out $$tmp/c.p12 -inkey $$tmp/k.key -in $$tmp/c.crt -passout pass:rdpconnect 2>/dev/null; \
-		security import $$tmp/c.p12 -k "$(HOME)/Library/Keychains/login.keychain-db" -P rdpconnect -T /usr/bin/codesign -A; \
-		rm -rf $$tmp; \
-	fi
-
 ifeq ($(UNAME),Darwin)
 
 install: $(APP)
@@ -123,4 +111,4 @@ endif
 clean:
 	rm -rf $(APP) $(APP_NAME) $(BIN) $(QT_BIN)
 
-.PHONY: all build macos linux vala qt swift package cert install uninstall run clean
+.PHONY: all build macos linux vala qt swift package install uninstall run clean
